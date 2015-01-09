@@ -2,9 +2,7 @@
 # coding: utf-8
 from __future__ import print_function
 
-import fcntl, os, binascii
-
-I2C_SLAVE = 0x0703
+import fcntl, os, binascii, functools, operator, time
 
 # read: 1, write: 0
 # first i2c byte is always written, rest is read/write according to rw bit
@@ -56,7 +54,6 @@ I2C_SLAVE = 0x0703
 
 
 examples = {name: bytearray.fromhex(string) for name, string in {
-    'wrong checksum test message': '1234 abcd',
     'enable application report': '6e 51 82 f5 01 49',
     'application test': '6e 51 81 b1 0f',
     'application test reply': '6f 6e 82 a1 00 1d',
@@ -90,26 +87,75 @@ examples = {name: bytearray.fromhex(string) for name, string in {
 
 
 messages = {
-  'ask for current brightness setting': '6e 51 82 01 10',
+  'request current brightness': '6e 51 82 01 10',
   # at least 40ms later
-  'read reply': '6f 6e
+  'read current brightness': '6f 6e 88 02 00 10',
+  'set brightness': '6e 51 84 03 10 00 32', # and wait 50ms
+  'save current settings': '6e 51 81 0c', # wait 200ms before next msg
+  'request capabilities': '6e 51 83 f3 00 00',
+  'read capabilities': '6f 6e a3 e3 00 00 ', # wait 50ms now or in between?
+  'request timing report': '6e 51 81 07', # wait 40ms
+  'red timing report': '6f 6e 06 4e 00 00 00 00 00', # wait 50ms before next
+  'write table': '6e 51 a3 e7 73 00 00 ', # wait 50ms
+  'request table': '6e 51 83 e2 73 00 00', # 83 or better 84?
+  'read table': '6f 6e a3 e4 00 00 ', # wait 50ms
+}
 
-def example_i2c_to_ddcci(i2c):
+def i2c_to_ddcci(i2c):
   # in case of reading from device, for checksum calculation
   # assume 0x50 as first byte (address + r/w (here: writing!?))
   if i2c[0] & 1:  # if i2c[0] == 0x6f and i2c[1] == 0x6e:
     i2c[0] = 0x50
   return i2c
 
-if __name__ == '__main__':
-  dev = os.open('/dev/i2c-6', os.O_RDWR)
-  # fcntl.ioctl(dev, I2C_SLAVE, 0x50)
+def i2c_to_dev(pseudo_i2c):
+  """converts bytes as they would be written over i2c to i2c-dev compatible
+     write() strings. Aehm... sorry, not absolutely right: the checksum
+     is also added."""
+
+  i2c_to_ddcci(pseudo_i2c)
+  pseudo_i2c.append(checksum(pseudo_i2c))
+
+
+def checksum(seq):
+  return functools.reduce(operator.xor, seq)
+
+class DDCCI(object):
+  I2C_SLAVE = 0x0703
+  ADDR = 0x37
+  WAIT = 0.05  # 50ms
+  _send = bytes.fromhex('6e 51')
+  _receive = bytes.fromhex('6f 6e')
+
+  def __init__(self, channel):
+    self._dev = os.open('/dev/i2c-' + str(channel), os.O_RDWR)
+    fcntl.ioctl(self._dev, DDCCI.I2C_SLAVE, DDCCI.ADDR)
+
+  def write(opcode, vcpcode=None, value=None):
+    time.sleep(DDCCI.WAIT)
+    ba = bytearray() + DDCCI._send
+    ba.append(opcode)
+    if vcpcode:
+      ba.append(vcpcode)
+      if value:
+        ba.append(value)
+    ba.append(checksum(ba))
+    os.write(self.dev, ba)
+
+  def read(opcode, vcpcode=None):
+    time.sleep(DDCCI.WAIT)
+    b = os.read(self.dev, 100)
+    print(b)
+    assert b[0] == DDCCI._receive[1]
+    bb = i2c_to_ddcci(bytearray(DDCCI._receive[0] + b))
+    print('checksum', checksum(bb))
+
+def check_examples():
   for key in examples:
-    ex = example_i2c_to_ddcci(examples[key])
-    checksum = 0
-    for byte in ex:
-      checksum ^= byte
-    if checksum != 0:
+    ex = i2c_to_ddcci(examples[key])
+    if checksum(ex) != 0:
       print('checksum error for message:', key)
 
-  # print(os.read(dev, 1))
+if __name__ == '__main__':
+  check_examples()
+  d = DDCCI(1)
