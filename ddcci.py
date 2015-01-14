@@ -120,6 +120,9 @@ def i2c_to_dev(pseudo_i2c):
 def checksum(seq):
   return functools.reduce(operator.xor, seq)
 
+def printbytes(prompt, b):
+    print(prompt, ' '.join(['{:02x}'.format(x) for x in b]))
+
 class DDCCI(object):
   I2C_SLAVE = 0x0703
   ADDR = 0x37
@@ -131,21 +134,25 @@ class DDCCI(object):
     self._dev = os.open('/dev/i2c-' + str(channel), os.O_RDWR)
     fcntl.ioctl(self._dev, DDCCI.I2C_SLAVE, DDCCI.ADDR)
 
-  def write(opcode, vcpcode=None, value=None):
+  def write(self, opcode, vcpcode=None, value=None):
     time.sleep(DDCCI.WAIT)
-    ba = bytearray() + DDCCI._send
+    ba = bytearray()
     ba.append(opcode)
     if vcpcode:
       ba.append(vcpcode)
       if value:
         ba.append(value)
+    ba.insert(0, len(ba) | 0x80)
+    ba[0:0] = DDCCI._send
     ba.append(checksum(ba))
-    os.write(self.dev, ba)
+    printbytes('write:', ba)
+    os.write(self._dev, ba[1:])
 
-  def read(opcode, vcpcode=None):
+  def read(self, opcode=None, vcpcode=None):
     time.sleep(DDCCI.WAIT)
-    b = os.read(self.dev, 100)
-    print(b)
+    b = os.read(self._dev, 10)
+    printbytes('read:', b)
+    return
     assert b[0] == DDCCI._receive[1]
     bb = i2c_to_ddcci(bytearray(DDCCI._receive[0] + b))
     print('checksum', checksum(bb))
@@ -159,3 +166,5 @@ def check_examples():
 if __name__ == '__main__':
   check_examples()
   d = DDCCI(1)
+  d.read()
+  d.write(0xf3, 0, 0)
