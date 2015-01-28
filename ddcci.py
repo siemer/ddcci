@@ -19,7 +19,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
-import fcntl, os, binascii, functools, operator, time
+import fcntl, os, binascii, functools, operator, time, sys
 
 # read: 1, write: 0
 # first i2c byte is always written, rest is read/write according to rw bit
@@ -155,24 +155,26 @@ class DDCCI(object):
     time.sleep(DDCCI.WAIT)
     ba = bytearray()
     ba.append(opcode)
-    if vcpcode:
+    if vcpcode is not None:
       ba.append(vcpcode)
-      if value:
-        ba.append(value)
+      if value is not None:
+        ba += value.to_bytes(2, 'big')
     ba.insert(0, len(ba) | 0x80)
     ba[0:0] = DDCCI._send
     ba.append(checksum(ba))
     printbytes('write:', ba)
     os.write(self._dev, ba[1:])
 
-  def read(self, opcode=None, vcpcode=None):
+  def read(self, amount=10):
     time.sleep(DDCCI.WAIT)
-    b = os.read(self._dev, 10)
+    b = os.read(self._dev, amount)
     printbytes('read:', b)
-    return
-    assert b[0] == DDCCI._receive[1]
-    bb = i2c_to_ddcci(bytearray(DDCCI._receive[0] + b))
-    print('checksum', checksum(bb))
+    if b[0] == DDCCI._receive[1]:
+      print('address right')
+      print('standard vcp' if b[1] & 0x80 else 'non-standard vcp')
+      length = b[1] & 0x7f
+      bb = i2c_to_ddcci(bytearray(DDCCI._receive[0:1] + b))
+      print('checksum', checksum(bb[0:length+4])) # over the length: src, dst, length byte, checksum
 
 def check_examples():
   for key in examples:
@@ -182,6 +184,9 @@ def check_examples():
 
 if __name__ == '__main__':
   check_examples()
-  d = DDCCI(1)
+  d = DDCCI(sys.argv[1])
   d.read()
   d.write(0xf3, 0, 0)
+  d.read()
+  d.read()
+  d.read()
