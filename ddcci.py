@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 # coding: utf-8
-from __future__ import print_function
 
 '''
 Copyright 2015 Robert Siemer
@@ -19,15 +18,136 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
-import fcntl, os, binascii, functools, operator, time, sys
+import fcntl
+import functools
+import glob
+import operator
+import os
+import sys
+import time
 
-# read: 1, write: 0
-# first i2c byte is always written, rest is read/write according to rw bit
-# write until we are out of bytes or slave nacks (bad; last byte lost?)
-# read until we don’t want any more and nack/stop
+# 1 i2c messages
+# 2 i2c-dev messages
+# 3 ddcci messages
+
+# 1 i2c messages
+
+# (controller view point:)
+# First comes the start condition. The following data are bytes.
+# The first byte is always written: the (slave) device address (7 bits) and
+# 1 bit indicates read (1) or write (0).
+# The following bytes are read or written according to the rw bit.
+# On writes: the slave acknowledges each byte (I think).
+# On read: controller can actually also NACK a byte (I think), but otherwise
+# controller just stops reading(?)
+# End condition is sent from the controller.
+
+# Actually, messages (i.e. read/write blocks) can be chained together to form
+# a transaction, by sending repeated start conditions (instead of end).
+# But according to wikipedia, many slave devices don’t care about that detail.
+
+# 2 i2c-dev messages
+
+# When using Linux i2c-dev devices, the 7bit address is set by ioctl() on
+# the open()ed device. The rw bit is according to read() or write(),
+# obviously. There are i2c-dev docs.
+
+
+# 3 ddc/ci messages
+
+# I’m writing this the third time now and I have to say: the ddc/ci spec
+# is such a messy mix of i2c tech with ddc/ci message ideology and
+# inconsistent with that as well. It is just easier and faster to explain
+# when throwing out the source/destination address bullshit it contains.
+
+# Ok, the slave address is 0x37. So the address-rw-byte is 0x6e/0x6f for
+# writing/reading. With linux i2c-dev you do not come in touch with it
+# directly. Even though the ddc/ci spec includes it in all regards (and
+# really bad so), in the following paragraphs, I’ll leave that byte out
+# of consideration when talking about the actual data to be written or read.
+
+# 3.1 checksum
+
+# write: xor all data bytes together and xor again with 0x6e, add this
+# checksum at the end
+
+# read: xor all data together including checksum: outcome should be 0x50
+
+# 3.1 message structure
+
+# write: first always 0x51, then amount of following bytes without
+# checksum or with 0x80 (i.e. data length minus 3), “vcp” command byte,
+# arguments (depend on command), checksum
+
+# read: first always 0x6e, length like in writes, fitting vcp reaction
+# byte, ..., checksum
+
+# Spec is a badly written mix of ddc/ci message ideology and i2c on the
+# wire tech. The former are messages with sender and destination (like
+# packets). The latter contain only 7bits to address the slave for
+# reading _and_ writing. No sender address required.
+
+# All ddc/ci messages go like this:
+
+# read goes like this:
+# 0x6f (written by master: i2c 0x37 addr + 1 for reading), then 0x6e (read)
+# - first byte has two functions
+#   - written as i2c addressing
+#   - but conceptually also the first byte of the (read!) ddc/ci message
+#   - 
+#   - is part of the checksum
+#   - BUT: 
+#   i2c addressing
+# - 
+
+# writes start with:
+# 0x6e (i2c 0x37 addr + 0 for writing), then 0x51
+# - on communications from master to slave, the spec seems to think of
+#   using the 
+
+
+# If ddc/ci wants to keep that sender/destination non-sense, why not use
+# the entire message as i2c data?
+# Why having two addresses for each entity (least significant bit of a byte
+# is flipped to form the other address)? That looks like i2c’s first byte for
+# reading/writing.
+
+
+# Why not calculate the checksum with the first byte as-is or without it?
+
+# And why not be consistent with the use of the two addresses?
+
+
+# 
+# It starts with the fact that slave address 0x37 is written as 0x6e/0x6f.
+# That would be the addr-rw-byte on i2c: i.e. 0x37 left shifted by 1 either
+# with or without the rw bit (least significant bit) set.
+# It then introduces a “host address” 0x50/0x51. But the bus master needs no
+# address.
+# Finally a ddc/ci message starts with the destination address followed by the
+# source address (and then more). Like a packet. Written by the sender.
+# But on the i2c wire, the first byte is always written by the master, with
+# the address of the slave (and the rw bit). 
+# written by the host, and always the addr of the 
+# 1. It considers the i2c address/rw byte part of the ddc/ci message.
+# 2. It talks about slave address 0x6e/0x6f, which is i2c address 0x37 with
+#    rw bit set to write/read. (0x6e >> 1 == 0x37)
+# 3. It gives the bus master the address 0x50/0x51 (i2c addr 0x28), but the
+#    bus master needs no address!
+# 4. The 2nd ddc/ci byte (1st i2c/i2c-dev data byte) is the source address!
+#    On ddc/ci writes, you are supposed to write 0x51, i.e. master addr +
+#    read(!) mode. WTF
+#    On reads, expect a 0x6e (slave + write mode).
+# 5. The 1st ddc/ci byte (i.e. i2c addr-rw-byte) is 0x6e on write (which is
+#    what i2c should indeed be sending), but it is supposed to be 0x50 on
+#    reads. Supposedly written by the slave? That would be the host addr +
+#    write(!) mode. WTF
+
+# ddc/ci messages are 
+
 
 # length byte first bit: should be 0 on vendor specific msgs
-# op codes: 
+# op codes:
 # 0x01 VCP request
 # 0x02 VCP reply
 # 0x03 VCP set
@@ -38,7 +158,7 @@ import fcntl, os, binascii, functools, operator, time, sys
 # 0xa1 display self-test reply
 # 0xb1 display self-test request
 # 0xc0-0xc8 is vendor specific???
-# 0xe1 idetification reply
+# 0xe1 identification reply
 # 0xe2 table read request
 # 0xe3 capabilities reply
 # 0xe4 table read reply
@@ -118,75 +238,117 @@ messages = {
   'read table': '6f 6e a3 e4 00 00 ', # wait 50ms
 }
 
-def i2c_to_ddcci(i2c):
-  # in case of reading from device, for checksum calculation
-  # assume 0x50 as first byte (address + r/w (here: writing!?))
-  if i2c[0] & 1:  # if i2c[0] == 0x6f and i2c[1] == 0x6e:
-    i2c[0] = 0x50
-  return i2c
-
-def i2c_to_dev(pseudo_i2c):
-  """converts bytes as they would be written over i2c to i2c-dev compatible
-     write() strings. Aehm... sorry, not absolutely right: the checksum
-     is also added."""
-
-  i2c_to_ddcci(pseudo_i2c)
-  pseudo_i2c.append(checksum(pseudo_i2c))
-
-
-def checksum(seq):
-  return functools.reduce(operator.xor, seq)
-
 def printbytes(prompt, b):
     print(prompt, ' '.join(['{:02x}'.format(x) for x in b]))
 
-class DDCCI(object):
-  I2C_SLAVE = 0x0703
-  ADDR = 0x37
+
+class I2cDev(object):
+  def __init__(self, fname, slave_addr):
+    self._dev = os.open(fname, os.O_RDWR)
+    # I2C_SLAVE address setup
+    fcntl.ioctl(self._dev, 0x0703, slave_addr)
+
+  def read(self, *args, **kwargs):
+    ba = os.read(self._dev, *args, **kwargs)
+    printbytes('read:', ba)
+    return ba
+
+  def write(self, *args, **kwargs):
+    printbytes('write:', args[0])
+    return os.write(self._dev, *args, **kwargs)
+
+
+class Ddcci(I2cDev):
   WAIT = 0.05  # 50ms
-  _send = bytes.fromhex('6e 51')
-  _receive = bytes.fromhex('6f 6e')
 
   def __init__(self, channel):
-    self._dev = os.open('/dev/i2c-' + str(channel), os.O_RDWR)
-    fcntl.ioctl(self._dev, DDCCI.I2C_SLAVE, DDCCI.ADDR)
+    I2cDev.__init__(self, '/dev/i2c-' + str(channel), 0x37)
 
-  def write(self, opcode, vcpcode=None, value=None):
-    time.sleep(DDCCI.WAIT)
-    ba = bytearray()
-    ba.append(opcode)
-    if vcpcode is not None:
-      ba.append(vcpcode)
-      if value is not None:
-        ba += value.to_bytes(2, 'big')
+  def write(self, *args):
+    time.sleep(Ddcci.WAIT)
+    ba = bytearray(args)
     ba.insert(0, len(ba) | 0x80)
-    ba[0:0] = DDCCI._send
-    ba.append(checksum(ba))
-    printbytes('write:', ba)
-    os.write(self._dev, ba[1:])
+    ba.insert(0, 0x51)
+    ba.append(functools.reduce(operator.xor, ba, 0x6e))
+    return I2cDev.write(self, ba)
 
-  def read(self, amount=10):
-    time.sleep(DDCCI.WAIT)
-    b = os.read(self._dev, amount)
-    printbytes('read:', b)
-    if b[0] == DDCCI._receive[1]:
-      print('address right')
-      print('standard vcp' if b[1] & 0x80 else 'non-standard vcp')
-      length = b[1] & 0x7f
-      bb = i2c_to_ddcci(bytearray(DDCCI._receive[0:1] + b))
-      print('checksum', checksum(bb[0:length+4])) # over the length: src, dst, length byte, checksum
+  @staticmethod
+  def check_read_bytes(ba):
+    checks = {
+      'source address': ba[0] == 0x6e,
+      'checksum': functools.reduce(operator.xor, ba) == 0x50,
+      'length': len(ba) >= (ba[1] & ~0x80) + 3
+        }
+    if False in checks.values():
+      print('read fails some checks:', checks)
 
-def check_examples():
-  for key in examples:
-    ex = i2c_to_ddcci(examples[key])
-    if checksum(ex) != 0:
-      print('checksum error for message:', key)
+  def read(self, amount):
+    time.sleep(Ddcci.WAIT)
+    b = I2cDev.read(self, amount + 3)
+    Ddcci.check_read_bytes(b)
+    return b[2:-1]
+
+
+class Mccs(Ddcci):
+  def write(self, vcpopcode, value):
+    return Ddcci.write(self, 0x03, vcpopcode, *value.to_bytes(2, 'big'))
+
+  def read(self, vcpopcode):
+    Ddcci.write(self, 0x01, vcpopcode)
+    b = Ddcci.read(self, 8)
+    checks = {
+      'is feature reply': b[0] == 0x02,
+      'supported VCP opcode': b[1] == 0,
+      'answer matches request': b[2] == vcpopcode,
+        }
+    if False in checks.values():
+      print('read fails some checks:', checks)
+    return b[3], int.from_bytes(b[4:6], 'big'), int.from_bytes(b[6:8], 'big')
+
+  def flush(self):
+    return Ddcci.write(self, 0x0c)
+
+  def capabilities(self):
+    Ddcci.write(self, 0xf3, 0, 0)
+    # ...
+
+  def timing(self):
+    Ddcci.write(self, 0x07)
+    return Ddcci.read(self, 6)
+
+
+class Edid(I2cDev):
+  def __init__(self, fname):
+    I2cDev.__init__(self, fname, 0x50)
+    candidate = self.read(512)  # current position unknown to us
+    start = candidate.find(bytes.fromhex('00 FF FF FF FF FF FF 00'))
+    if start < 0:
+      raise IOError()
+    self.edid = e = candidate[start:start+256]
+    manufacturer = int.from_bytes(e[8:10], 'big')
+    m = ''
+    for i in range(3):
+      m = chr(ord('A') - 1 + (manufacturer & 0b11111)) + m
+      manufacturer >>= 5
+    print('Manufacturer', manufacturer, m)
+    printbytes('Product code and serial number', e[10:16])
+    printbytes('Week and year', e[16:18])
+    printbytes('EDID version', e[18:20])
+
+  @classmethod
+  def test(self, fname):
+    try:
+      instance = self(fname)
+    except:
+      return None
+    else:
+      return instance
+
+  @classmethod
+  def scan(self):
+    return filter(None, map(self.test, glob.glob('/dev/i2c-*')))
+
 
 if __name__ == '__main__':
-  check_examples()
-  d = DDCCI(sys.argv[1])
-  d.read()
-  d.write(0xf3, 0, 0)
-  d.read()
-  d.read()
-  d.read()
+  m = Mccs(sys.argv[1])
+  print('Brightness', m.read(0x10))
