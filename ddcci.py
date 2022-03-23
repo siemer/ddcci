@@ -346,7 +346,7 @@ class Edid(I2cDev):
 
   @classmethod
   def scan(self):
-    return filter(None, map(self.test, glob.glob('/dev/i2c-*')))
+    return [x for x in map(self.test, glob.glob('/dev/i2c-*')) if x]
 
 
 if __name__ == '__main__':
