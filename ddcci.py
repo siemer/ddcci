@@ -248,9 +248,9 @@ class I2cDev(object):
     # I2C_SLAVE address setup
     fcntl.ioctl(self._dev, 0x0703, slave_addr)
 
-  def read(self, *args, **kwargs):
-    ba = os.read(self._dev, *args, **kwargs)
-    printbytes('read:', ba)
+  def read(self, length):
+    ba = os.read(self._dev, length)
+    if length < 20: printbytes('read:', ba)
     return ba
 
   def write(self, *args, **kwargs):
